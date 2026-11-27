@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isCrossOrigin, jsonError } from '@/lib/api';
 import { deleteGoal } from '@/lib/goals';
 import { getCurrentUser } from '@/lib/session';
+import { can } from '@/lib/roles';
 import { getSiteForUser } from '@/lib/sites';
 import { invalidateStatsCache } from '@/lib/stats';
 
@@ -21,6 +22,7 @@ export async function DELETE(
   try {
     const site = await getSiteForUser(params.id, user.id);
     if (!site) return jsonError('Site not found.', 404);
+    if (!can(site.role, 'manage')) return jsonError('You do not have permission to do that.', 403);
 
     // Scoped by site id as well, so a goal of another site can never be removed here.
     if (!(await deleteGoal(site.id, params.goalId))) return jsonError('Goal not found.', 404);

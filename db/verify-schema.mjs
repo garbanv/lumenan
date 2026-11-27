@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { SALT_SQL } from '../lib/salts.mjs';
 import { goalResultsSql } from '../lib/goals.mjs';
+import { siteForUserSql } from '../lib/roles.mjs';
 import { buildFilterClause } from '../lib/filters.mjs';
 
 // These mirror the queries in lib/stats.ts. They are duplicated rather than
@@ -763,6 +764,101 @@ check('goals are unique per site/type/value and cascade with the site', async ()
   await db.query(`DELETE FROM sites WHERE id = 'goal-site'`);
   const { rows } = await db.query(`SELECT count(*)::int AS n FROM goals WHERE site_id = 'goal-site'`);
   assertEqual(rows[0].n, 0, 'deleting the site removes its goals');
+});
+
+// ---------------------------------------------------------------------------
+// Team access. These run the exact access query lib/roles.mjs sends.
+// ---------------------------------------------------------------------------
+
+check('site access resolves owner, manager, viewer, and nothing for outsiders', async () => {
+  const mk = async (email) =>
+    (await db.query(
+      `INSERT INTO users (email, email_key, password_hash, name) VALUES ($1, $1, 'x', $1) RETURNING id`,
+      [email]
+    )).rows[0].id;
+  const owner = await mk('team-owner@example.com');
+  const manager = await mk('team-manager@example.com');
+  const viewer = await mk('team-viewer@example.com');
+  const outsider = await mk('team-outsider@example.com');
+
+  await db.query(`INSERT INTO sites (id, user_id, name, domain) VALUES ('team-site', $1, 'T', 't.test')`, [owner]);
+  await db.query(`INSERT INTO sites (id, user_id, name, domain) VALUES ('other-site', $1, 'O', 'o.test')`, [outsider]);
+  await db.query(
+    `INSERT INTO site_members (site_id, user_id, role) VALUES ('team-site', $1, 'manager'), ('team-site', $2, 'viewer')`,
+    [manager, viewer]
+  );
+
+  const sql = siteForUserSql('s.id, s.name');
+  const roleOf = async (siteId, userId) => (await db.query(sql, [siteId, userId])).rows[0]?.role ?? null;
+
+  assertEqual(await roleOf('team-site', owner), 'owner', 'the creator is the owner');
+  assertEqual(await roleOf('team-site', manager), 'manager', 'a manager member');
+  assertEqual(await roleOf('team-site', viewer), 'viewer', 'a viewer member');
+  assertEqual(await roleOf('team-site', outsider), null, 'an outsider has no access');
+  assertEqual(await roleOf('other-site', manager), null, 'membership of one site grants nothing on another');
+  assertEqual(await roleOf('no-such-site', owner), null, 'a missing site has no role');
+});
+
+check('roles are restricted, and a member row is unique per site and user', async () => {
+  const { rows } = await db.query(`SELECT id FROM users WHERE email = 'team-viewer@example.com'`);
+  const reject = async (sql, params) => {
+    try { await db.query(sql, params); return false; } catch { return true; }
+  };
+  assert(
+    await reject(`INSERT INTO site_members (site_id, user_id, role) VALUES ('other-site', $1, 'owner')`, [rows[0].id]),
+    "'owner' is not a member role"
+  );
+  assert(
+    await reject(`INSERT INTO site_members (site_id, user_id, role) VALUES ('team-site', $1, 'viewer')`, [rows[0].id]),
+    'a user cannot be a member of the same site twice'
+  );
+});
+
+check('an invite can be accepted once, and is found only by its hash', async () => {
+  const site = 'team-site';
+  await db.query(
+    `INSERT INTO site_invites (site_id, token_hash, role, expires_at)
+     VALUES ($1, 'hash-1', 'viewer', now() + interval '7 days')`,
+    [site]
+  );
+  const claim = () =>
+    db.query(
+      `UPDATE site_invites SET accepted_at = now()
+        WHERE token_hash = 'hash-1' AND accepted_at IS NULL AND expires_at > now()
+        RETURNING id`
+    );
+  assertEqual((await claim()).rows.length, 1, 'the first claim succeeds');
+  assertEqual((await claim()).rows.length, 0, 'the second claim finds nothing: single use');
+
+  await db.query(
+    `INSERT INTO site_invites (site_id, token_hash, role, expires_at)
+     VALUES ($1, 'hash-2', 'viewer', now() - interval '1 minute')`,
+    [site]
+  );
+  const expired = await db.query(
+    `UPDATE site_invites SET accepted_at = now()
+      WHERE token_hash = 'hash-2' AND accepted_at IS NULL AND expires_at > now() RETURNING id`
+  );
+  assertEqual(expired.rows.length, 0, 'an expired invite cannot be claimed');
+
+  let duplicate = false;
+  try {
+    await db.query(`INSERT INTO site_invites (site_id, token_hash, role, expires_at) VALUES ($1, 'hash-1', 'viewer', now())`, [site]);
+  } catch { duplicate = true; }
+  assert(duplicate, 'token hashes are unique');
+});
+
+check('access rows follow their site and user when either is deleted', async () => {
+  const count = async (sql) => (await db.query(sql)).rows[0].n;
+  await db.query(`DELETE FROM users WHERE email = 'team-viewer@example.com'`);
+  assertEqual(
+    await count(`SELECT count(*)::int AS n FROM site_members WHERE site_id = 'team-site'`),
+    1,
+    "deleting a member's account removes only their membership"
+  );
+  await db.query(`DELETE FROM sites WHERE id = 'team-site'`);
+  assertEqual(await count(`SELECT count(*)::int AS n FROM site_members WHERE site_id = 'team-site'`), 0, 'members go with the site');
+  assertEqual(await count(`SELECT count(*)::int AS n FROM site_invites WHERE site_id = 'team-site'`), 0, 'invites go with the site');
 });
 
 // ---------------------------------------------------------------------------

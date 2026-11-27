@@ -9,11 +9,12 @@ import {
 /** Shared by the login and signup routes, which differ only in authorization. */
 export async function startSession(
   userId: string,
-  userAgent: string | null
+  userAgent: string | null,
+  extra: Record<string, unknown> = {}
 ): Promise<NextResponse> {
   const { token, expiresAt } = await createSession(userId, userAgent);
 
-  const response = NextResponse.json({ ok: true });
+  const response = NextResponse.json({ ok: true, ...extra });
   response.cookies.set(SESSION_COOKIE_NAME, token, sessionCookieOptions(expiresAt));
 
   // Housekeeping on a code path that already writes to the sessions table, so

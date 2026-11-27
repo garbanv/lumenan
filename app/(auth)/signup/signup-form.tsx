@@ -13,10 +13,18 @@ interface ApiErrorBody {
   fields?: Record<string, string>;
 }
 
-export function SignupForm() {
+export interface SignupInvite {
+  token: string;
+  siteName: string;
+  role: 'manager' | 'viewer';
+  /** When set, the invitation only works for this address. */
+  email: string | null;
+}
+
+export function SignupForm({ invite }: { invite?: SignupInvite }) {
   const router = useRouter();
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(invite?.email ?? '');
   const [password, setPassword] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -39,7 +47,7 @@ export function SignupForm() {
       const response = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, email, password, inviteToken: invite?.token }),
       });
 
       if (!response.ok) {
@@ -49,8 +57,10 @@ export function SignupForm() {
         return;
       }
 
-      // The signup route sets the session cookie, so go straight to the app.
-      router.push('/sites?welcome=1');
+      // The signup route sets the session cookie, so go straight to the app; an
+      // invitation lands on the site it granted.
+      const body = (await response.json().catch(() => ({}))) as { siteId?: string };
+      router.push(body.siteId ? `/sites/${encodeURIComponent(body.siteId)}` : '/sites?welcome=1');
       router.refresh();
     } catch {
       setFormError('Network error. Check your connection and try again.');
@@ -62,9 +72,16 @@ export function SignupForm() {
   return (
     <div className="w-full max-w-sm">
       <h1 className="text-2xl font-semibold tracking-tight">Create your account</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Free for up to 3 sites. No credit card required.
-      </p>
+      {invite ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          You have been invited to <span className="font-medium text-foreground">{invite.siteName}</span>{' '}
+          as {invite.role === 'manager' ? 'a manager' : 'a viewer'}. Create an account to join.
+        </p>
+      ) : (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Free for up to 3 sites. No credit card required.
+        </p>
+      )}
 
       <form onSubmit={onSubmit} className="mt-8 space-y-5" noValidate>
         {formError && (
@@ -97,6 +114,7 @@ export function SignupForm() {
             autoComplete="email"
             required
             value={email}
+            readOnly={!!invite?.email}
             onChange={(event) => setEmail(event.target.value)}
             aria-invalid={!!fieldErrors.email}
             aria-describedby={fieldErrors.email ? 'email-error' : undefined}

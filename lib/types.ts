@@ -132,9 +132,28 @@ export interface Site {
   allowedDomains: string[];
   excludedPaths: string[];
   excludeSelfReferrals: boolean;
-  /** Secret for the public read-only dashboard; null when the site is not shared. */
+  /** Secret for the public read-only dashboard; null when the site is not shared (or the viewer may not see it). */
   shareToken: string | null;
+  /** What the signed-in user is on this site. */
+  role: 'owner' | 'manager' | 'viewer';
   createdAt: string;
+}
+
+export interface TeamMember {
+  userId: string;
+  email: string;
+  name: string | null;
+  role: 'manager' | 'viewer';
+  joinedAt: string;
+}
+
+export interface TeamInvite {
+  id: string;
+  role: 'manager' | 'viewer';
+  /** Set when the link only works for one address. */
+  email: string | null;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface Goal {

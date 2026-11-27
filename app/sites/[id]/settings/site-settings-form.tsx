@@ -9,7 +9,9 @@ import { FieldError, FieldHint, Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatDate } from '@/lib/utils';
 import { Select } from '@/components/ui/select';
-import type { Goal, Site } from '@/lib/types';
+import { can } from '@/lib/roles';
+import type { Goal, Site, TeamInvite, TeamMember } from '@/lib/types';
+import { TeamCard } from './team-card';
 
 interface ApiErrorBody {
   error?: string;
@@ -20,10 +22,14 @@ export function SiteSettingsForm({
   site,
   goals,
   eventNames,
+  members,
+  invites,
 }: {
   site: Site;
   goals: Goal[];
   eventNames: string[];
+  members: TeamMember[];
+  invites: TeamInvite[];
 }) {
   const router = useRouter();
 
@@ -181,9 +187,12 @@ export function SiteSettingsForm({
 
       <GoalsCard site={site} goals={goals} eventNames={eventNames} />
 
+      {can(site.role, 'team') && <TeamCard site={site} members={members} invites={invites} />}
+
       <SharingCard site={site} />
 
-      <DangerZone site={site} />
+      {/* Deleting a site is the owner's call alone. */}
+      {can(site.role, 'delete') && <DangerZone site={site} />}
     </form>
   );
 }

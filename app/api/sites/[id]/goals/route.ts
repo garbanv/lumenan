@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { isCrossOrigin, jsonError, readJson } from '@/lib/api';
 import { MAX_GOALS_PER_SITE, createGoal, validateGoalInput } from '@/lib/goals';
 import { getCurrentUser } from '@/lib/session';
+import { can } from '@/lib/roles';
 import { getSiteForUser } from '@/lib/sites';
 import { invalidateStatsCache } from '@/lib/stats';
 
@@ -26,6 +27,7 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
     // Ownership before anything is written; someone else's site is a 404.
     const site = await getSiteForUser(params.id, user.id);
     if (!site) return jsonError('Site not found.', 404);
+    if (!can(site.role, 'manage')) return jsonError('You do not have permission to do that.', 403);
 
     const result = await createGoal(site.id, validated.goal);
     if (!result.ok) {

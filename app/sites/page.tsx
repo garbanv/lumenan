@@ -108,6 +108,11 @@ export default async function SitesPage(
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate font-medium">{site.name}</span>
+                        {site.role !== 'owner' && (
+                          <Badge variant="outline">
+                            {site.role === 'manager' ? 'Manager' : 'Viewer'}
+                          </Badge>
+                        )}
                         {change !== null && Math.abs(change) >= 0.1 && (
                           <Badge variant={change > 0 ? 'success' : 'destructive'}>
                             {change > 0 ? '+' : '−'}
@@ -116,9 +121,12 @@ export default async function SitesPage(
                         )}
                       </div>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">{site.domain}</p>
-                      <p className="mt-1 truncate font-mono text-2xs text-muted-foreground/70">
-                        {site.id}
-                      </p>
+                      {/* The site id is the tracking key; viewers have no use for it. */}
+                      {site.role !== 'viewer' && (
+                        <p className="mt-1 truncate font-mono text-2xs text-muted-foreground/70">
+                          {site.id}
+                        </p>
+                      )}
                     </div>
 
                     <div className="shrink-0 text-right">

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isUniqueViolation, query } from './db';
 import { slugify } from './slug';
 import { generateShareToken, isShareToken } from './share';
+import { siteForUserSql } from './roles';
 import type { Site, SiteSummary } from './types';
 
 interface SiteRow {
@@ -12,10 +13,17 @@ interface SiteRow {
   excluded_paths: string[] | null;
   exclude_self_referrals: boolean;
   share_token: string | null;
+  /** The reader's role; every query that returns a Site supplies it. */
+  role?: string;
   created_at: Date;
 }
 
+function toRole(value: string | undefined): Site['role'] {
+  return value === 'manager' || value === 'viewer' ? value : 'owner';
+}
+
 function toSite(row: SiteRow): Site {
+  const role = toRole(row.role);
   return {
     id: row.id,
     name: row.name,
@@ -23,7 +31,9 @@ function toSite(row: SiteRow): Site {
     allowedDomains: row.allowed_domains ?? [],
     excludedPaths: row.excluded_paths ?? [],
     excludeSelfReferrals: row.exclude_self_referrals,
-    shareToken: row.share_token,
+    // A viewer must not learn the public-link secret.
+    shareToken: role === 'viewer' ? null : row.share_token,
+    role,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -49,7 +59,7 @@ const SITE_COLUMNS_QUALIFIED = `s.id, s.name, s.domain, s.allowed_domains,
                                 s.excluded_paths, s.exclude_self_referrals, s.share_token, s.created_at`;
 
 /**
- * All sites owned by a user, each with headline numbers for the last 7 days and
+ * All sites a user can see (owned, or shared with them), each with headline numbers for the last 7 days and
  * the 7 days before that so the list can show a trend.
  */
 export async function listSitesForUser(userId: string): Promise<SiteSummary[]> {
@@ -57,10 +67,12 @@ export async function listSitesForUser(userId: string): Promise<SiteSummary[]> {
     SiteRow & { pageviews: number; visitors: number; previous_pageviews: number }
   >(
     `SELECT ${SITE_COLUMNS_QUALIFIED},
+            CASE WHEN s.user_id = $1 THEN 'owner' ELSE m.role END AS role,
             coalesce(cur.pageviews, 0)::int  AS pageviews,
             coalesce(cur.visitors, 0)::int   AS visitors,
             coalesce(prev.pageviews, 0)::int AS previous_pageviews
        FROM sites s
+       LEFT JOIN site_members m ON m.site_id = s.id AND m.user_id = $1
        LEFT JOIN LATERAL (
          SELECT count(*) FILTER (WHERE event_type = 'pageview') AS pageviews,
                 count(*) FILTER (WHERE is_new_visitor)           AS visitors
@@ -75,7 +87,7 @@ export async function listSitesForUser(userId: string): Promise<SiteSummary[]> {
             AND e.created_at > now() - interval '14 days'
             AND e.created_at <= now() - interval '7 days'
        ) prev ON true
-      WHERE s.user_id = $1
+      WHERE s.user_id = $1 OR m.user_id IS NOT NULL
       ORDER BY s.created_at DESC`,
     [userId]
   );
@@ -88,11 +100,13 @@ export async function listSitesForUser(userId: string): Promise<SiteSummary[]> {
   }));
 }
 
+/**
+ * The one way to ask "may this user see this site, and as what?". A site the user
+ * neither owns nor was invited to comes back as null, indistinguishable from one
+ * that does not exist. Callers then check `can(site.role, ...)` for writes.
+ */
 export async function getSiteForUser(siteId: string, userId: string): Promise<Site | null> {
-  const { rows } = await query<SiteRow>(
-    `SELECT ${SITE_COLUMNS} FROM sites WHERE id = $1 AND user_id = $2`,
-    [siteId, userId]
-  );
+  const { rows } = await query<SiteRow>(siteForUserSql(SITE_COLUMNS_QUALIFIED), [siteId, userId]);
   const row = rows[0];
   return row ? toSite(row) : null;
 }
@@ -118,8 +132,12 @@ export async function setSharingForUser(
                             ELSE COALESCE(share_token, $4)
                           END,
             updated_at  = now()
-      WHERE id = $1 AND user_id = $2
-      RETURNING ${SITE_COLUMNS}`,
+      WHERE id = $1
+        AND (user_id = $2 OR EXISTS (
+              SELECT 1 FROM site_members m
+               WHERE m.site_id = sites.id AND m.user_id = $2 AND m.role = 'manager'))
+      RETURNING ${SITE_COLUMNS},
+                CASE WHEN user_id = $2 THEN 'owner' ELSE 'manager' END AS role`,
     [siteId, userId, action, generateShareToken()]
   );
   const row = rows[0];
@@ -130,7 +148,7 @@ export async function setSharingForUser(
 export async function getSiteByShareToken(token: string): Promise<Site | null> {
   if (!isShareToken(token)) return null;
   const { rows } = await query<SiteRow>(
-    `SELECT ${SITE_COLUMNS} FROM sites WHERE share_token = $1`,
+    `SELECT ${SITE_COLUMNS}, 'viewer' AS role FROM sites WHERE share_token = $1`,
     [token]
   );
   const row = rows[0];
@@ -173,7 +191,7 @@ export async function createSite(
       );
       const row = rows[0];
       if (!row) throw new Error('INSERT ... RETURNING produced no row');
-      return { ok: true, site: toSite(row) };
+      return { ok: true, site: toSite({ ...row, role: 'owner' }) };
     } catch (err) {
       // A generated id collided (astronomically unlikely, but a retry is
       // cheaper than surfacing a 500 for a recoverable conflict).
@@ -192,7 +210,10 @@ export interface UpdateSiteInput {
   excludeSelfReferrals?: boolean;
 }
 
-/** Scoped by user_id, so a wrong owner updates nothing and gets null back. */
+/**
+ * Allowed for the owner and for managers; anyone else updates nothing and gets
+ * null back. Viewers, outsiders and missing sites are indistinguishable.
+ */
 export async function updateSiteForUser(
   siteId: string,
   userId: string,
@@ -206,8 +227,12 @@ export async function updateSiteForUser(
             excluded_paths         = COALESCE($6, excluded_paths),
             exclude_self_referrals = COALESCE($7, exclude_self_referrals),
             updated_at             = now()
-      WHERE id = $1 AND user_id = $2
-      RETURNING ${SITE_COLUMNS}`,
+      WHERE id = $1
+        AND (user_id = $2 OR EXISTS (
+              SELECT 1 FROM site_members m
+               WHERE m.site_id = sites.id AND m.user_id = $2 AND m.role = 'manager'))
+      RETURNING ${SITE_COLUMNS},
+                CASE WHEN user_id = $2 THEN 'owner' ELSE 'manager' END AS role`,
     [
       siteId,
       userId,

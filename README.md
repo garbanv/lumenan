@@ -336,6 +336,36 @@ a single page load is never counted twice.
 
 ---
 
+## Team access
+
+A site's owner can invite people from **Settings → Team**.
+
+| | Owner | Manager | Viewer |
+| --- | --- | --- | --- |
+| View the dashboard | ✓ | ✓ | ✓ |
+| Change settings, goals, the public link; see the tracking code | ✓ | ✓ | |
+| Invite people, change roles, remove people | ✓ | | |
+| Delete the site | ✓ | | |
+
+- **Invitations are links, not emails.** The app has no mail service. Creating an
+  invitation shows a link (`/invite/<token>`) once; send it yourself. A link works
+  once, expires after 7 days, and can optionally be locked to one email address.
+  Only a hash of the token is stored, so a database leak yields no usable links.
+  Lost a link? Revoke the invitation and create another.
+- **Invitees can join a closed deployment.** With `ALLOW_SIGNUP=false`, a valid
+  invitation still lets its holder create an account (only for the address it is
+  locked to, if any); nobody else can. Existing users sign in and accept.
+- **Access is checked on every request.** `getSiteForUser` returns the caller's
+  role or nothing; a site you cannot access looks exactly like a missing one (404).
+  Removing someone, or demoting them, takes effect on their next request. A member
+  can leave a site themselves. Viewers never receive the public-link secret.
+- Shared sites appear in the invitee's site list with a role badge. They do not count
+  against the invitee's own site limit. Limits: 25 people and 20 open invitations
+  per site.
+- **Not built:** transferring ownership, email notifications, per-person audit logs.
+
+---
+
 ## Multi-tenancy and access control
 
 This is the part that matters most if you are running this for other people.
@@ -574,6 +604,16 @@ dynamically, so the documented `next/script` install recorded nothing at all.
 That case is now covered by a regression test.
 
 ---
+
+### Live checks (need a running app)
+
+`npm run test:live:team` drives the real HTTP API as an owner, manager, viewer and
+outsider (plus invitation edge cases) and checks the whole permission matrix: 50
+checks. `npm run test:live:closed` checks that, with signups closed, only a valid
+invitation can create an account (run it against an app started with
+`ALLOW_SIGNUP=false`). Both create throwaway users and delete them afterwards. The
+Docker form is the same as below with `tests/live/team-access.mjs` or
+`tests/live/team-closed-signup.mjs`.
 
 ### Live check for the public share link
 

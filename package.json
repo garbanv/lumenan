@@ -15,7 +15,9 @@
     "db:grant-admin": "node db/grant-admin.mjs",
     "db:scrub": "node db/scrub-legacy.mjs",
     "geoip:update": "node scripts/download-geoip.mjs",
-    "test:live": "node tests/live/share-leak.mjs"
+    "test:live": "node tests/live/share-leak.mjs",
+    "test:live:team": "node tests/live/team-access.mjs",
+    "test:live:closed": "node tests/live/team-closed-signup.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

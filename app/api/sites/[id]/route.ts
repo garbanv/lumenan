@@ -8,6 +8,7 @@ import {
   updateSiteForUser,
 } from '@/lib/sites';
 import { normalizeDomain, parseDomainList } from '@/lib/slug';
+import { can } from '@/lib/roles';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,10 @@ export async function PATCH(req: Request, props: RouteContext) {
   }
 
   try {
+    const current = await getSiteForUser(params.id, user.id);
+    if (!current) return jsonError('Site not found.', 404);
+    if (!can(current.role, 'manage')) return jsonError('You do not have permission to do that.', 403);
+
     const site = await updateSiteForUser(params.id, user.id, {
       ...(name !== undefined ? { name: name.slice(0, 120) } : {}),
       ...(domain !== undefined ? { domain } : {}),
@@ -98,6 +103,10 @@ export async function DELETE(req: Request, props: RouteContext) {
   if (!user) return jsonError('Not signed in.', 401);
 
   try {
+    const current = await getSiteForUser(params.id, user.id);
+    if (!current) return jsonError('Site not found.', 404);
+    if (!can(current.role, 'delete')) return jsonError('Only the owner can delete a site.', 403);
+
     const deleted = await deleteSiteForUser(params.id, user.id);
     if (!deleted) return jsonError('Site not found.', 404);
     // Events and visitors cascade with the site row.

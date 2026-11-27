@@ -256,6 +256,35 @@ CREATE INDEX IF NOT EXISTS idx_visitors_site_day ON visitors (site_id, day DESC)
 -- ---------------------------------------------------------------------------
 -- Events: raw, append-only fact table
 -- ---------------------------------------------------------------------------
+-- Team access. The creator of a site owns it (sites.user_id); everyone else with
+-- access has a row here. The owner is never a member of their own site.
+CREATE TABLE IF NOT EXISTS site_members (
+  site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role        TEXT NOT NULL CHECK (role IN ('manager', 'viewer')),
+  invited_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (site_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_site_members_user ON site_members (user_id);
+
+-- Single-use invitation links. Only the SHA-256 of the token is stored, so a
+-- database leak yields no usable link. `email`, when set, restricts the link to
+-- that address.
+CREATE TABLE IF NOT EXISTS site_invites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  token_hash  TEXT NOT NULL UNIQUE,
+  role        TEXT NOT NULL CHECK (role IN ('manager', 'viewer')),
+  email       TEXT,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ NOT NULL,
+  accepted_at TIMESTAMPTZ,
+  accepted_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_site_invites_site ON site_invites (site_id, created_at DESC);
+
 -- Conversion goals: a custom event name or a page path a site owner wants to
 -- count. Matching happens at read time against `events` (see lib/goals.mjs), so
 -- a new goal reports on history immediately and deleting one loses nothing.

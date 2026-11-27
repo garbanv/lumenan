@@ -44,7 +44,7 @@ export default async function SiteLayout(
       </div>
 
       <div className="mt-6 border-b border-border">
-        <SiteNav siteId={site.id} />
+        <SiteNav siteId={site.id} role={site.role} />
       </div>
 
       <div className="mt-6">{children}</div>

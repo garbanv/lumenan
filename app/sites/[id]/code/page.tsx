@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth';
+import { can } from '@/lib/roles';
 import { getSiteForUser } from '@/lib/sites';
 import { EmbedCode } from '@/components/embed-code';
 
@@ -15,7 +16,7 @@ export default async function SiteCodePage(props: { params: Promise<{ id: string
   const params = await props.params;
   const user = await requireUser(`/sites/${params.id}/code`);
   const site = await getSiteForUser(params.id, user.id);
-  if (!site) notFound();
+  if (!site || !can(site.role, 'manage')) notFound();
 
   return (
     <div className="max-w-3xl space-y-6">

@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils';
 
 interface SiteNavProps {
   siteId: string;
+  /** Viewers only get the dashboard. */
+  role: 'owner' | 'manager' | 'viewer';
 }
 
 /**
@@ -14,7 +16,7 @@ interface SiteNavProps {
  * passed in, so a deep link still highlights correctly on a server-rendered
  * first paint.
  */
-export function SiteNav({ siteId }: SiteNavProps) {
+export function SiteNav({ siteId, role }: SiteNavProps) {
   const pathname = usePathname();
   const base = `/sites/${encodeURIComponent(siteId)}`;
 
@@ -22,7 +24,7 @@ export function SiteNav({ siteId }: SiteNavProps) {
     { href: base, label: 'Dashboard', icon: BarChart3, exact: true },
     { href: `${base}/code`, label: 'Tracking code', icon: Code2, exact: false },
     { href: `${base}/settings`, label: 'Settings', icon: Settings, exact: false },
-  ];
+  ].filter((item) => role !== 'viewer' || item.exact);
 
   return (
     <nav aria-label="Site sections" className="-mb-px flex gap-1 overflow-x-auto">

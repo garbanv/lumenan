@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { isCrossOrigin, jsonError, readJson } from '@/lib/api';
 import { getCurrentUser } from '@/lib/session';
-import { setSharingForUser, type ShareAction } from '@/lib/sites';
+import { can } from '@/lib/roles';
+import { getSiteForUser, setSharingForUser, type ShareAction } from '@/lib/sites';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,7 +10,7 @@ export const dynamic = 'force-dynamic';
 const ACTIONS: readonly ShareAction[] = ['enable', 'regenerate', 'disable'];
 
 /**
- * Manage the public share link of one site (owner only).
+ * Manage the public share link of one site (owner and managers).
  * Body: { "action": "enable" | "regenerate" | "disable" }
  */
 export async function POST(req: Request, props: { params: Promise<{ id: string }> }) {
@@ -26,6 +27,10 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
   if (!action) return jsonError('action must be enable, regenerate or disable.', 400);
 
   try {
+    const current = await getSiteForUser(params.id, user.id);
+    if (!current) return jsonError('Site not found.', 404);
+    if (!can(current.role, 'manage')) return jsonError('You do not have permission to do that.', 403);
+
     const site = await setSharingForUser(params.id, user.id, action);
     // Someone else's site is reported as missing, as everywhere else.
     if (!site) return jsonError('Site not found.', 404);
