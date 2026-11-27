@@ -181,6 +181,12 @@ docker compose down -v
 The compose file uses hardcoded development credentials and a placeholder
 `VISITOR_SALT`. **Change both before exposing this anywhere reachable.**
 
+> **Production compose (`docker-compose-prod.yml`, used by Coolify)** has no
+> separate `migrate` service. The `app` container applies the schema each time it
+> starts, then serves. Where the commands in this README say
+> `docker compose run --rm migrate <command>`, run `<command>` in the `app`
+> container's terminal instead, for example `node db/grant-admin.mjs you@example.com`.
+
 ### Upgrading a database created before multi-tenancy
 
 `db/schema.sql` is written to migrate the old single-tenant schema in place: it

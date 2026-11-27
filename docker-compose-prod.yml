@@ -6,9 +6,9 @@ services:
       POSTGRES_USER: ${SERVICE_USER_POSTGRES}
       POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
       POSTGRES_DB: analytics
-    # No `ports:` here on purpose. The database is reached by the other services
-    # over the compose network; publishing 5432 would put it on the server's
-    # public IP, protected by nothing but its password.
+    # No `ports:` here on purpose. The database is reached by the app over the
+    # compose network; publishing 5432 would put it on the server's public IP,
+    # protected by nothing but its password.
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,33 +17,28 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-off job: applies db/schema.sql, then exits. Runs automatically before
-  # `app` starts (see depends_on) and can be re-run by hand with:
-  #   docker compose run --rm migrate
-  migrate:
-    build: .
-    # Exits by design; stops Coolify from reporting it as unhealthy.
-    restart: "no"
-    environment:
-      DATABASE_URL: postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@db:5432/analytics
-    command: ['node', 'db/migrate.mjs']
-    depends_on:
-      db:
-        condition: service_healthy
-
   app:
     build:
       context: .
       args:
-
         NEXT_PUBLIC_APP_ORIGIN: ${NEXT_PUBLIC_APP_ORIGIN:-http://localhost:3000}
     restart: unless-stopped
+    # Applies db/schema.sql, then starts the server. This used to be a separate
+    # one-shot `migrate` service, but Coolify can attach the public domain to any
+    # built service, and it attached it to the one that exits, so the site
+    # answered 404. With a single built service there is nothing to mix up.
+    # The migration is idempotent, so running it on every start is safe. `exec`
+    # hands the process to node so shutdown signals reach it (the event queue is
+    # flushed on SIGTERM, see lib/shutdown.ts).
+    command: ['sh', '-c', 'node db/migrate.mjs && exec node server.js']
     environment:
-      DATABASE_URL: postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@db:5432/analytics
-      VISITOR_SALT: ${SERVICE_PASSWORD_64_VISITORSALT}
-      NEXT_PUBLIC_APP_ORIGIN: ${NEXT_PUBLIC_APP_ORIGIN:-http://localhost:3000}
-      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
-      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+      # Tells Coolify this service serves the public domain, on port 3000.
+      - SERVICE_FQDN_APP_3000
+      - DATABASE_URL=postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@db:5432/analytics
+      - VISITOR_SALT=${SERVICE_PASSWORD_64_VISITORSALT}
+      - NEXT_PUBLIC_APP_ORIGIN=${NEXT_PUBLIC_APP_ORIGIN:-http://localhost:3000}
+      - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
+      - ALLOW_SIGNUP=${ALLOW_SIGNUP:-true}
     # `expose`, not `ports`: the reverse proxy (Coolify/Traefik) reaches the app
     # over the network. Publishing 3000 would let people bypass the proxy over
     # plain HTTP, where X-Forwarded-For can be forged.
@@ -52,8 +47,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
 volumes:
   db_data:

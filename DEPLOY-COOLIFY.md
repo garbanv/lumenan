@@ -6,8 +6,10 @@ For a first real deployment with one or two known users. Work top to bottom.
 
 1. Coolify → **New resource** → **Docker Compose** (from your Git repository).
 2. **Compose file:** `docker-compose-prod.yml`.
-3. Assign your domain to the **`app`** service, port **3000**, with HTTPS on
-   (`https://analytics.example.com`). Assign no domain to `db` or `migrate`.
+3. The compose file declares the domain for **`app`** on port 3000 itself
+   (`SERVICE_FQDN_APP_3000`), so Coolify offers a domain field on `app`. Replace the
+   generated `sslip.io` address with your own: `https://analytics.example.com:3000`
+   (the `:3000` is the port the app listens on). `db` takes no domain.
 4. Do **not** add port mappings for any service. The compose file deliberately
    has none: the database must not be reachable from the internet, and the app
    must only be reachable through the proxy.
@@ -27,12 +29,12 @@ makes that day's visitors look new once.
 
 ## 3. First deploy and first account
 
-1. Deploy. The `migrate` service applies the schema and exits (that is expected;
-   it will show as "exited").
+1. Deploy. There are two services, `db` and `app`. `app` applies the database schema
+   every time it starts (the migration is idempotent), then serves the site.
 2. Open the site over **https** and sign up. Signing in over plain `http` fails because
    session cookies are `Secure` in production.
 3. On `/sites`, click **Make me an admin** straight away: until someone does, the
-   first account to ask gets it. Or, from the Coolify terminal of the `migrate`
+   first account to ask gets it. Or, from the Coolify terminal of the `app`
    service: `node db/grant-admin.mjs you@example.com`.
 4. Create your client's account the same way (or have them sign up now), before step 4.
 
@@ -80,3 +82,27 @@ unaffected. Turn it back on briefly whenever you need to add someone.
   for the cleanup queries to schedule.
 - **Updates.** Redeploying restarts the app; buffered events (up to 2 seconds) are
   flushed on shutdown. The schema migration runs on every deploy and is idempotent.
+
+## Troubleshooting: 404 after a successful deploy
+
+A 404 written as plain text (`404 page not found`) comes from Traefik and means it has
+no running container registered for that hostname.
+
+- **Check which container owns the hostname** (run on the server):
+
+  ```bash
+  docker ps -a --format '{{.Names}}' | grep -E 'app-|db-' | while read c; do
+    echo "== $c"; docker inspect --format '{{json .Config.Labels}}' "$c" | tr ',' '\n' | grep -i rule
+  done
+  ```
+
+  The `Host(...)` rule must be on `app-…`. If it is on anything else, or missing,
+  open Configuration → Services → `app`, set the domain with `:3000`, and redeploy.
+  Labels are only written at deploy time.
+- **An older version of this compose file had a separate `migrate` service.** Coolify
+  once attached the domain to it (it exits after running, so the site 404'd). If you
+  are upgrading from that version, delete the leftover `SERVICE_URL_MIGRATE` and
+  `SERVICE_FQDN_MIGRATE` variables and confirm the domain is on `app`.
+- **`app` is not healthy or keeps restarting.** Read its logs. It prints
+  "Schema is up to date." and then "Ready" when it starts; a database error or a
+  missing `SERVICE_PASSWORD_64_VISITORSALT` shows up before that.
