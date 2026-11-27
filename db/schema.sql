@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS sites (
   -- Drop events whose Referer is the tracked domain itself, so internal
   -- navigation does not appear as a referral source.
   exclude_self_referrals BOOLEAN NOT NULL DEFAULT true,
+  -- Secret that makes a read-only public dashboard reachable at /share/<token>.
+  -- NULL = not shared. It is a bearer credential for aggregate stats only (never
+  -- raw events, never settings); regenerating or clearing it revokes the link.
+  share_token TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -144,6 +148,14 @@ BEGIN
     ALTER TABLE sites ADD COLUMN user_id UUID REFERENCES users(id) ON DELETE CASCADE;
   END IF;
 
+  -- Public share links, added after the first release.
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+     WHERE table_name = 'sites' AND table_schema = current_schema()
+  ) THEN
+    ALTER TABLE sites ADD COLUMN IF NOT EXISTS share_token TEXT;
+  END IF;
+
   -- Columns added to events after the first release. Same reasoning: the
   -- CREATE above is skipped for an existing table, so each new column needs an
   -- explicit, idempotent ALTER.
@@ -171,6 +183,8 @@ END
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_sites_user ON sites (user_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_share_token ON sites (share_token)
+  WHERE share_token IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Admin composite indexes
@@ -242,6 +256,20 @@ CREATE INDEX IF NOT EXISTS idx_visitors_site_day ON visitors (site_id, day DESC)
 -- ---------------------------------------------------------------------------
 -- Events: raw, append-only fact table
 -- ---------------------------------------------------------------------------
+-- Conversion goals: a custom event name or a page path a site owner wants to
+-- count. Matching happens at read time against `events` (see lib/goals.mjs), so
+-- a new goal reports on history immediately and deleting one loses nothing.
+CREATE TABLE IF NOT EXISTS goals (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  type        TEXT NOT NULL CHECK (type IN ('event', 'page')),
+  -- event: the custom event name. page: a path, optionally ending in * for a prefix.
+  value       TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (site_id, type, value)
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id              BIGSERIAL PRIMARY KEY,
   site_id         TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,

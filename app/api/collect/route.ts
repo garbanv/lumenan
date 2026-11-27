@@ -9,7 +9,7 @@ import {
   shouldCountReferral,
   visitorDay,
 } from '@/lib/ingest';
-import { visitorSalt } from '@/lib/env';
+import { trustedProxyHops, visitorSalt } from '@/lib/env';
 import { enqueueEvent } from '@/lib/queue';
 import { countryFromIp } from '@/lib/geoip';
 import { getDailySalt } from '@/lib/salts';
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
   // current tracker never sends it, because cached copies of the old tracker do.
   const path = normalizePath(rawPath);
 
-  const meta = clientMetadata(req.headers);
+  const meta = clientMetadata(req.headers, trustedProxyHops());
 
   const limit = rateLimit(`ingest:${siteId}:${meta.ip}`, INGEST_LIMIT_PER_MINUTE, 60_000);
   if (!limit.allowed) {

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { cn, formatExact, share } from '@/lib/utils';
 import type { BreakdownRow } from '@/lib/types';
 
@@ -62,12 +63,13 @@ export function BreakdownList({
         return (
           <li key={`${row.label}-${row.value}`}>
             {hrefFor ? (
-              <a
+              <Link
                 href={hrefFor(row)}
+                scroll={false}
                 className="relative flex items-center justify-between gap-4 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {content}
-              </a>
+              </Link>
             ) : (
               <div className="relative flex items-center justify-between gap-4 rounded-md px-2 py-1.5 text-sm">
                 {content}

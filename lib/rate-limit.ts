@@ -10,6 +10,7 @@ export {
   resetRateLimits,
   INGEST_LIMIT_PER_MINUTE,
   LOGIN_LIMIT_PER_15_MIN,
+  SHARE_LIMIT_PER_MINUTE,
 } from './rate-limit.mjs';
 
 export interface RateLimitResult {

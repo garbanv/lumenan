@@ -40,6 +40,21 @@ export function visitorSalt(): string {
   );
 }
 
+/**
+ * How many reverse proxies sit in front of the app and append to
+ * `x-forwarded-for`. Default 1 (one Traefik/nginx/Vercel edge). Use 2 for a CDN
+ * plus a proxy, and 0 if the app is exposed directly, which makes the client IP
+ * unknowable and collapses all visitors into one, so only do that deliberately.
+ * Too high a value lets clients spoof their IP; too low attributes traffic to
+ * your own proxy.
+ */
+export function trustedProxyHops(): number {
+  const raw = process.env.TRUSTED_PROXY_HOPS;
+  if (raw === undefined || raw.trim() === '') return 1;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 0 && n <= 10 ? n : 1;
+}
+
 /** Public origin, used for absolute URLs in the marketing pages and snippets. */
 export function publicOrigin(): string {
   const explicit = process.env.NEXT_PUBLIC_APP_ORIGIN;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn, formatDate, formatExact } from '@/lib/utils';
 import type { TimeseriesPoint } from '@/lib/types';
 
@@ -28,6 +28,23 @@ const PADDING = { top: 12, right: 8, bottom: 28, left: 44 };
  * forced to interpret a path.
  */
 export function AreaChart({ data, interval, showVisitors = false, className }: AreaChartProps) {
+  // Draw in real pixels. The chart used to render in a fixed 800-unit space and
+  // stretch it to the card (preserveAspectRatio="none"), which squashed the axis
+  // text whenever the card was not 800px wide. Measuring the container keeps the
+  // SVG's units equal to screen pixels, so text is never distorted.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(800);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setWidth(Math.max(280, Math.round(el.clientWidth)));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // The container only exists once there is data to draw.
+  }, [data.length > 0]);
+
   const gradientId = useId();
   const visitorGradientId = useId();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -56,7 +73,7 @@ export function AreaChart({ data, interval, showVisitors = false, className }: A
   }
 
   const { ceiling, series } = geometry;
-  const innerWidth = 800 - PADDING.left - PADDING.right;
+  const innerWidth = width - PADDING.left - PADDING.right;
   const innerHeight = HEIGHT - PADDING.top - PADDING.bottom;
 
   const x = (index: number) =>
@@ -89,15 +106,16 @@ export function AreaChart({ data, interval, showVisitors = false, className }: A
       ? new Date(bucket).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
       : formatDate(bucket);
 
-  // Label every nth tick so the axis stays legible at 90 points.
-  const tickStep = Math.max(1, Math.ceil(series.length / 7));
+  // Label every nth tick, as many as fit (about 72px each) so a narrow card
+  // never overlaps its own labels.
+  const maxLabels = Math.max(2, Math.floor(innerWidth / 72));
+  const tickStep = Math.max(1, Math.ceil(series.length / maxLabels));
 
   return (
-    <div className={cn('relative', className)}>
+    <div ref={containerRef} className={cn('relative', className)}>
       <svg
-        viewBox={`0 0 800 ${HEIGHT}`}
+        viewBox={`0 0 ${width} ${HEIGHT}`}
         className="h-[220px] w-full"
-        preserveAspectRatio="none"
         role="img"
         aria-label={`Pageviews over time. ${formatExact(totalPageviews)} total across ${series.length} ${
           interval === 'hour' ? 'hours' : 'days'
@@ -120,7 +138,7 @@ export function AreaChart({ data, interval, showVisitors = false, className }: A
             <line
               x1={PADDING.left}
               y1={line.y}
-              x2={800 - PADDING.right}
+              x2={width - PADDING.right}
               y2={line.y}
               stroke="hsl(var(--border))"
               strokeWidth="1"
@@ -204,21 +222,27 @@ export function AreaChart({ data, interval, showVisitors = false, className }: A
           </>
         )}
 
-        {/* X-axis labels */}
-        {series.map((point, index) =>
-          index % tickStep === 0 || index === series.length - 1 ? (
+        {/* X-axis labels. The last label is right-aligned so it stays inside the
+            plot instead of being clipped by the right edge, and a regular tick
+            that would collide with it is dropped. */}
+        {series.map((point, index) => {
+          const isLast = index === series.length - 1;
+          const isRegularTick = index % tickStep === 0;
+          const collidesWithLast = !isLast && series.length - 1 - index < tickStep * 0.6;
+          if (!isLast && (!isRegularTick || collidesWithLast)) return null;
+          return (
             <text
               key={`tick-${point.bucket}`}
-              x={x(index)}
+              x={isLast && series.length > 1 ? width - PADDING.right : x(index)}
               y={HEIGHT - 6}
-              textAnchor="middle"
+              textAnchor={isLast && series.length > 1 ? 'end' : 'middle'}
               className="fill-muted-foreground"
               style={{ fontSize: 11 }}
             >
               {labelFor(point.bucket)}
             </text>
-          ) : null
-        )}
+          );
+        })}
       </svg>
 
       {active && (
@@ -226,7 +250,7 @@ export function AreaChart({ data, interval, showVisitors = false, className }: A
           role="status"
           className="pointer-events-none absolute top-2 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg"
           style={{
-            left: `${(x(hoverIndex ?? 0) / 800) * 100}%`,
+            left: `${(x(hoverIndex ?? 0) / width) * 100}%`,
             // Flip the tooltip to the left of the cursor past the midpoint so it
             // never overflows the card.
             transform: (hoverIndex ?? 0) > series.length / 2 ? 'translateX(-100%)' : 'none',

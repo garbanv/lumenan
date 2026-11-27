@@ -24,6 +24,11 @@ limits, and a redesigned dashboard.
 | Migration / seed | `db/migrate.mjs` |
 | Write batching | `lib/queue.ts` |
 | Dashboard queries | `lib/stats.ts` |
+| Dashboard filters | `lib/filters.mjs`, `app/sites/[id]/filter-bar.tsx` |
+| Goals | `lib/goals.mjs`, `lib/goals.ts`, `app/api/sites/[id]/goals/*` |
+| Current visitors | `lib/realtime.ts`, `app/api/stats/realtime/route.ts` |
+| Public share links | `lib/share.mjs`, `app/share/[token]/page.tsx`, `app/api/sites/[id]/share/route.ts` |
+| Stats cache | `lib/ttl-cache.mjs` |
 | Design system | `app/globals.css`, `components/ui/*` |
 
 ---
@@ -230,6 +235,7 @@ npm run db:seed
 | `VISITOR_SALT` | yes | Long-lived secret mixed into the visitor hash alongside the random per-day salt (it acts as a pepper, so a copy of the database alone cannot be used to test IP addresses). Keep it long, random and secret. Changing it only makes the current day's visitors look new once; it does not affect history. `openssl rand -hex 32` |
 | `GEOIP_DB_PATH` | no | Location of the DB-IP country file. Default `data/geoip/dbip-country-lite.csv.gz`. |
 | `GEOIP_AUTO_UPDATE` | no | `false` stops the app downloading a newer monthly GeoIP file on its own. Default: enabled. |
+| `TRUSTED_PROXY_HOPS` | no | Number of reverse proxies in front of the app that append to `X-Forwarded-For`. Default `1` (one Traefik/nginx/Vercel). Use `2` for Cloudflare plus a proxy. The client IP is taken that many entries from the right, because anything further left is client-supplied. `0` ignores forwarding headers entirely (all visitors collapse into one). Too high lets visitors spoof their IP and dodge the rate limit; too low attributes traffic to your own proxy. |
 | `NEXT_PUBLIC_APP_ORIGIN` | no | Public origin, used for absolute URLs. Falls back to `localhost:3000`, or `VERCEL_URL` when deployed there. |
 
 ---
@@ -290,6 +296,36 @@ window.trackEvent('signup_completed');
 The tracker handles client-side navigation automatically (`pushState`,
 `replaceState` and `popstate`), and de-duplicates navigations to the same URL so
 a single page load is never counted twice.
+
+---
+
+## Using the dashboard
+
+- **Click to filter.** Click any row in Top pages, Referrers, Devices, Countries,
+  Browsers or Operating systems and every number on the page narrows to it. Filters
+  stack, show as removable chips, and live in the URL (`?page=/pricing&device=mobile`),
+  so a filtered view can be bookmarked or shared. Under a page filter, "bounce rate"
+  means visitors who viewed that page once, not visitors who left after one page
+  overall. Filter values are always sent to PostgreSQL as bound parameters.
+- **Current visitors.** The count next to the date range is the number of distinct
+  visitors with an event in the last 5 minutes. It ignores the date range and
+  filters, refreshes every 15 seconds while the tab is visible, and is cached for
+  5 seconds on the server (`GET /api/stats/realtime`).
+- **Goals.** Settings → Goals counts a custom event (`trackEvent('signup')`) or a page
+  visit (`/thank-you`, or `/blog/*` for everything under `/blog/`). The Goals table
+  shows visitors, total conversions and conversion rate (visitors who reached the
+  goal ÷ all visitors in the same range and filters). Matching happens when the page
+  is read, so a new goal reports on past traffic at once and deleting one removes no
+  events. Up to 20 goals per site.
+- **Public dashboard link.** Settings → Public dashboard creates a secret URL,
+  `/share/<token>`, that shows a read-only dashboard to anyone who has it, no account
+  needed. It carries totals and breakdowns only: no activity feed or individual
+  visits (they are removed on the server, not just hidden), no settings, no other
+  sites. "Create new link" replaces the token and so revokes the old URL; "Stop
+  sharing" removes it. The token is stored as plain text (you can view the link
+  again), it is a bearer credential like any unlisted link, and it appears in your
+  server's access logs. The page sends `noindex` and `no-referrer`. Requests to
+  shared pages are limited to 120 per minute per client IP.
 
 ---
 
@@ -531,6 +567,26 @@ dynamically, so the documented `next/script` install recorded nothing at all.
 That case is now covered by a regression test.
 
 ---
+
+### Live check for the public share link
+
+`npm test` and `npm run test:db` need no running app. One check does, because it
+inspects the page the server actually sends:
+
+```bash
+BASE_URL=http://localhost:3000 DATABASE_URL=postgresql://... npm run test:live
+```
+
+It creates a throwaway user and site, requests `/share/<token>` with no cookies,
+fails if any individual visit (timestamp, per-visit fields, the activity feed) or
+the internal site id is in the response, and deletes what it created. Run it after
+changing anything on the share page or in `lib/stats.ts`. Inside Docker, from the
+project directory:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD/tests:/app/tests:ro" -v "$PWD/lib:/app/lib:ro" \
+  -e BASE_URL=http://app:3000 migrate node tests/live/share-leak.mjs
+```
 
 ## Deploying
 

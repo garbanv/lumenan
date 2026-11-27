@@ -3,6 +3,7 @@ import { jsonError } from '@/lib/api';
 import { getCurrentUser } from '@/lib/session';
 import { getSiteForUser } from '@/lib/sites';
 import { getStats, resolveRange } from '@/lib/stats';
+import { parseFilters } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,7 @@ export async function GET(req: Request) {
     if (!site) return jsonError('Site not found.', 404);
 
     const spec = resolveRange(url.searchParams.get('range'));
-    const stats = await getStats(site.id, spec);
+    const stats = await getStats(site.id, spec, parseFilters(url.searchParams));
 
     return NextResponse.json(
       {

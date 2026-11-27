@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isUniqueViolation, query } from './db';
 import { slugify } from './slug';
+import { generateShareToken, isShareToken } from './share';
 import type { Site, SiteSummary } from './types';
 
 interface SiteRow {
@@ -10,6 +11,7 @@ interface SiteRow {
   allowed_domains: string[] | null;
   excluded_paths: string[] | null;
   exclude_self_referrals: boolean;
+  share_token: string | null;
   created_at: Date;
 }
 
@@ -21,6 +23,7 @@ function toSite(row: SiteRow): Site {
     allowedDomains: row.allowed_domains ?? [],
     excludedPaths: row.excluded_paths ?? [],
     excludeSelfReferrals: row.exclude_self_referrals,
+    shareToken: row.share_token,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -39,11 +42,11 @@ export function generateSiteId(name: string, domain: string): string {
 }
 
 const SITE_COLUMNS = `id, name, domain, allowed_domains, excluded_paths,
-                      exclude_self_referrals, created_at`;
+                      exclude_self_referrals, share_token, created_at`;
 
 /** Same columns, qualified for queries that join other tables. */
 const SITE_COLUMNS_QUALIFIED = `s.id, s.name, s.domain, s.allowed_domains,
-                                s.excluded_paths, s.exclude_self_referrals, s.created_at`;
+                                s.excluded_paths, s.exclude_self_referrals, s.share_token, s.created_at`;
 
 /**
  * All sites owned by a user, each with headline numbers for the last 7 days and
@@ -89,6 +92,46 @@ export async function getSiteForUser(siteId: string, userId: string): Promise<Si
   const { rows } = await query<SiteRow>(
     `SELECT ${SITE_COLUMNS} FROM sites WHERE id = $1 AND user_id = $2`,
     [siteId, userId]
+  );
+  const row = rows[0];
+  return row ? toSite(row) : null;
+}
+
+export type ShareAction = 'enable' | 'regenerate' | 'disable';
+
+/**
+ * Turn the public link on, replace it, or turn it off. Scoped by user_id like
+ * every other write. `enable` keeps an existing token so pressing it twice does
+ * not silently break a link someone already has; `regenerate` is the explicit
+ * way to revoke the old one.
+ */
+export async function setSharingForUser(
+  siteId: string,
+  userId: string,
+  action: ShareAction
+): Promise<Site | null> {
+  const { rows } = await query<SiteRow>(
+    `UPDATE sites
+        SET share_token = CASE $3
+                            WHEN 'disable'    THEN NULL
+                            WHEN 'regenerate' THEN $4
+                            ELSE COALESCE(share_token, $4)
+                          END,
+            updated_at  = now()
+      WHERE id = $1 AND user_id = $2
+      RETURNING ${SITE_COLUMNS}`,
+    [siteId, userId, action, generateShareToken()]
+  );
+  const row = rows[0];
+  return row ? toSite(row) : null;
+}
+
+/** Resolve a public link. Malformed tokens never reach the database. */
+export async function getSiteByShareToken(token: string): Promise<Site | null> {
+  if (!isShareToken(token)) return null;
+  const { rows } = await query<SiteRow>(
+    `SELECT ${SITE_COLUMNS} FROM sites WHERE share_token = $1`,
+    [token]
   );
   const row = rows[0];
   return row ? toSite(row) : null;

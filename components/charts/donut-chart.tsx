@@ -1,11 +1,14 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { cn, formatExact, formatPercent, share } from '@/lib/utils';
 import type { BreakdownRow } from '@/lib/types';
 
 interface DonutChartProps {
   data: BreakdownRow[];
+  /** When provided, each legend row links here (the folded "Other" row never does). */
+  hrefFor?: (row: BreakdownRow) => string;
   /** Rows beyond this are folded into "Other" so the ring stays readable. */
   maxSegments?: number;
   className?: string;
@@ -27,7 +30,7 @@ const SERIES = [
  * The legend carries the numbers, so the ring is decorative and marked
  * `aria-hidden`; a screen reader gets the list, which is the useful part.
  */
-export function DonutChart({ data, maxSegments = 5, className }: DonutChartProps) {
+export function DonutChart({ data, hrefFor, maxSegments = 5, className }: DonutChartProps) {
   const [hovered, setHovered] = useState<number | null>(null);
 
   const segments = useMemo(() => {
@@ -104,27 +107,45 @@ export function DonutChart({ data, maxSegments = 5, className }: DonutChartProps
       </div>
 
       <ul className="w-full min-w-0 space-y-2">
-        {segments.map((segment, index) => (
-          <li
-            key={segment.label}
-            className="flex items-center justify-between gap-3 text-sm"
-            onMouseEnter={() => setHovered(index)}
-            onMouseLeave={() => setHovered(null)}
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <span
-                aria-hidden="true"
-                className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                style={{ backgroundColor: SERIES[index % SERIES.length] }}
-              />
-              <span className="truncate capitalize">{segment.label}</span>
-            </span>
-            <span className="tabular shrink-0 text-muted-foreground">
-              {formatExact(segment.value)}
-              <span className="ml-2 text-xs">{formatPercent(share(segment.value, total), 0)}</span>
-            </span>
-          </li>
-        ))}
+        {segments.map((segment, index) => {
+          const isOther = !data.some((row) => row.label === segment.label);
+          const href = hrefFor && !isOther ? hrefFor(segment) : null;
+          const row = (
+            <>
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                  style={{ backgroundColor: SERIES[index % SERIES.length] }}
+                />
+                <span className="truncate capitalize">{segment.label}</span>
+              </span>
+              <span className="tabular shrink-0 text-muted-foreground">
+                {formatExact(segment.value)}
+                <span className="ml-2 text-xs">{formatPercent(share(segment.value, total), 0)}</span>
+              </span>
+            </>
+          );
+          return (
+            <li
+              key={segment.label}
+              onMouseEnter={() => setHovered(index)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              {href ? (
+                <Link
+                  href={href}
+                  scroll={false}
+                  className="-mx-2 flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {row}
+                </Link>
+              ) : (
+                <div className="flex items-center justify-between gap-3 text-sm">{row}</div>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

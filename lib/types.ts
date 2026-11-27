@@ -132,7 +132,27 @@ export interface Site {
   allowedDomains: string[];
   excludedPaths: string[];
   excludeSelfReferrals: boolean;
+  /** Secret for the public read-only dashboard; null when the site is not shared. */
+  shareToken: string | null;
   createdAt: string;
+}
+
+export interface Goal {
+  id: string;
+  name: string;
+  type: 'event' | 'page';
+  /** event: the custom event name. page: a path, optionally ending in * for a prefix. */
+  value: string;
+  createdAt: string;
+}
+
+export interface GoalResult extends Goal {
+  /** Times the goal happened in the window (a visitor can convert more than once). */
+  conversions: number;
+  /** Distinct visitors who converted. */
+  visitors: number;
+  /** visitors / all visitors in the same window and filters, as a percentage; null with no traffic. */
+  conversionRate: number | null;
 }
 
 export interface SiteSummary extends Site {
@@ -193,6 +213,7 @@ export interface StatsResponse {
   browsers: BreakdownRow[];
   operatingSystems: BreakdownRow[];
   customEvents: BreakdownRow[];
+  goals: GoalResult[];
   recent: {
     path: string;
     referrer: string | null;

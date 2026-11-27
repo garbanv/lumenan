@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth';
 import { getSiteForUser } from '@/lib/sites';
+import { listGoals, listRecentEventNames } from '@/lib/goals';
 import { SiteSettingsForm } from './site-settings-form';
 
 export const dynamic = 'force-dynamic';
@@ -17,5 +18,10 @@ export default async function SiteSettingsPage(props: { params: Promise<{ id: st
   const site = await getSiteForUser(params.id, user.id);
   if (!site) notFound();
 
-  return <SiteSettingsForm site={site} />;
+  const [goals, eventNames] = await Promise.all([
+    listGoals(site.id),
+    listRecentEventNames(site.id),
+  ]);
+
+  return <SiteSettingsForm site={site} goals={goals} eventNames={eventNames} />;
 }

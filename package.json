@@ -14,7 +14,8 @@
     "db:seed": "node db/migrate.mjs --seed",
     "db:grant-admin": "node db/grant-admin.mjs",
     "db:scrub": "node db/scrub-legacy.mjs",
-    "geoip:update": "node scripts/download-geoip.mjs"
+    "geoip:update": "node scripts/download-geoip.mjs",
+    "test:live": "node tests/live/share-leak.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

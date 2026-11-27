@@ -158,9 +158,18 @@ test('normalizePath rejects non-strings and bounds the length', () => {
 // Request metadata
 // ---------------------------------------------------------------------------
 
-test('getClientIp takes the first entry of x-forwarded-for', () => {
-  assert.equal(getClientIp(headers({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' })), '1.2.3.4');
+test('getClientIp trusts only the entries our proxies appended', () => {
+  // One trusted proxy: the rightmost entry; anything to its left is client-supplied.
+  assert.equal(getClientIp(headers({ 'x-forwarded-for': '6.6.6.6, 5.6.7.8' })), '5.6.7.8');
   assert.equal(getClientIp(headers({ 'x-forwarded-for': '  1.2.3.4  ' })), '1.2.3.4');
+  // Two trusted hops (CDN + proxy): second from the right.
+  assert.equal(getClientIp(headers({ 'x-forwarded-for': '6.6.6.6, 1.2.3.4, 10.0.0.1' }), 2), '1.2.3.4');
+  // Chain shorter than the trusted depth: fall back to the leftmost entry.
+  assert.equal(getClientIp(headers({ 'x-forwarded-for': '1.2.3.4' }), 3), '1.2.3.4');
+  // No trusted proxy: forwarding headers are ignored entirely.
+  assert.equal(getClientIp(headers({ 'x-forwarded-for': '1.2.3.4', 'x-real-ip': '9.9.9.9' }), 0), '0.0.0.0');
+  // Capped, since it becomes a rate-limit key.
+  assert.equal(getClientIp(headers({ 'x-forwarded-for': 'a'.repeat(500) })).length, 64);
 });
 
 test('getClientIp falls back to x-real-ip and then a placeholder', () => {

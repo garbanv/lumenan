@@ -1,4 +1,7 @@
 import { query } from './db';
+import { TtlCache } from './ttl-cache.mjs';
+import { buildFilterClause, filtersKey, type Filters } from './filters';
+import { goalResultsSql } from './goals.mjs';
 import { RANGES, resolveRange, type RangeSpec } from './ranges';
 import type {
   BreakdownRow,
@@ -37,10 +40,52 @@ interface SummaryRow extends CountsRow {
  * rows per site this should read from a rollup table instead; the shape of
  * this function is the seam where that swap happens.
  */
-export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsResponse> {
+export function getStats(
+  siteId: string,
+  spec: RangeSpec,
+  filters: Filters = {}
+): Promise<StatsResponse> {
+  return statsCache.get(`${siteId}:${spec.key}:${filtersKey(filters)}`, () =>
+    computeStats(siteId, spec, filters)
+  );
+}
+
+/** Drop cached results, e.g. after goals change so the dashboard reflects them at once. */
+export function invalidateStatsCache(): void {
+  statsCache.clear();
+}
+
+/**
+ * Dashboards are read far more often than they change, and each load costs
+ * eleven queries over the raw events table. A short TTL bounds that cost per
+ * (site, range) regardless of how many people are watching, at the price of
+ * numbers up to STATS_CACHE_TTL_MS old. State lives on globalThis so dev hot
+ * reloads and separately bundled modules share one cache.
+ */
+const STATS_CACHE_TTL_MS = 30_000;
+const globalCache = globalThis as typeof globalThis & {
+  __analyticsStatsCache?: TtlCache<StatsResponse>;
+};
+const statsCache = (globalCache.__analyticsStatsCache ??= new TtlCache<StatsResponse>({
+  ttlMs: STATS_CACHE_TTL_MS,
+}));
+
+async function computeStats(
+  siteId: string,
+  spec: RangeSpec,
+  filters: Filters
+): Promise<StatsResponse> {
   const window = intervalFor(spec);
   const previousWindowStart = intervalFor(spec, 2);
   const bucket = spec.interval;
+
+  // Every query below is narrowed by the same dashboard filters. Values are
+  // bound parameters numbered after each query's own; see lib/filters.mjs.
+  const fSummary = buildFilterClause(filters, 3, 'e.');
+  const fPrevious = buildFilterClause(filters, 4);
+  const fSeries = buildFilterClause(filters, 4, 'e.');
+  const fBreakdown = buildFilterClause(filters, 3);
+  const fRecent = buildFilterClause(filters, 2);
 
   const [
     summaryResult,
@@ -53,6 +98,7 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
     browsersResult,
     operatingSystemsResult,
     customEventsResult,
+    goalsResult,
     recentResult,
   ] = await Promise.all([
     // --- current window summary -------------------------------------------
@@ -70,7 +116,7 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
            FROM events e, bounds b
           WHERE e.site_id = $1
             AND e.created_at > b.start_at
-            AND e.created_at <= b.end_at
+            AND e.created_at <= b.end_at${fSummary.sql}
           GROUP BY e.visitor_hash
        )
        SELECT
@@ -81,22 +127,22 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          (SELECT count(*)::int FROM events e, bounds b
            WHERE e.site_id = $1
              AND e.created_at > b.start_at
-             AND e.created_at <= b.end_at
+             AND e.created_at <= b.end_at${fSummary.sql}
              AND e.event_type = 'custom')                                    AS events`,
-      [siteId, window]
+      [siteId, window, ...fSummary.params]
     ),
 
     // --- preceding window, for the delta indicators ------------------------
     query<CountsRow>(
       `SELECT
          count(*) FILTER (WHERE event_type = 'pageview')::int AS pageviews,
-         count(*) FILTER (WHERE is_new_visitor)::int          AS visitors,
+         count(DISTINCT visitor_hash)::int                    AS visitors,
          0::int                                               AS events
          FROM events
         WHERE site_id = $1
           AND created_at > now() - $2::interval
-          AND created_at <= now() - $3::interval`,
-      [siteId, previousWindowStart, window]
+          AND created_at <= now() - $3::interval${fPrevious.sql}`,
+      [siteId, previousWindowStart, window, ...fPrevious.params]
     ),
 
     // --- timeseries, bucketed by hour or day depending on the range --------
@@ -129,10 +175,10 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          LEFT JOIN events e
            ON e.site_id = $1
           AND e.created_at >= bk.bucket
-          AND e.created_at < bk.bucket + ('1 ' || $3)::interval
+          AND e.created_at < bk.bucket + ('1 ' || $3)::interval${fSeries.sql}
         GROUP BY bk.bucket
         ORDER BY bk.bucket ASC`,
-      [siteId, window, bucket]
+      [siteId, window, bucket, ...fSeries.params]
     ),
 
     // --- breakdowns -------------------------------------------------------
@@ -143,11 +189,11 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          FROM events
         WHERE site_id = $1
           AND created_at > now() - $2::interval
-          AND event_type = 'pageview'
+          AND event_type = 'pageview'${fBreakdown.sql}
         GROUP BY path
         ORDER BY value DESC, label ASC
         LIMIT 10`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
@@ -155,11 +201,11 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          FROM events
         WHERE site_id = $1
           AND created_at > now() - $2::interval
-          AND event_type = 'pageview'
+          AND event_type = 'pageview'${fBreakdown.sql}
         GROUP BY referrer_domain
         ORDER BY value DESC, label ASC
         LIMIT 10`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
@@ -167,40 +213,40 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          FROM events
         WHERE site_id = $1
           AND created_at > now() - $2::interval
-          AND country IS NOT NULL
+          AND country IS NOT NULL${fBreakdown.sql}
         GROUP BY country
         ORDER BY value DESC, label ASC
         LIMIT 10`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
       `SELECT coalesce(device, 'Unknown') AS label, count(*)::int AS value
          FROM events
-        WHERE site_id = $1 AND created_at > now() - $2::interval
+        WHERE site_id = $1 AND created_at > now() - $2::interval${fBreakdown.sql}
         GROUP BY device
         ORDER BY value DESC, label ASC`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
       `SELECT coalesce(browser, 'Unknown') AS label, count(*)::int AS value
          FROM events
-        WHERE site_id = $1 AND created_at > now() - $2::interval
+        WHERE site_id = $1 AND created_at > now() - $2::interval${fBreakdown.sql}
         GROUP BY browser
         ORDER BY value DESC, label ASC
         LIMIT 8`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
       `SELECT coalesce(os, 'Unknown') AS label, count(*)::int AS value
          FROM events
-        WHERE site_id = $1 AND created_at > now() - $2::interval
+        WHERE site_id = $1 AND created_at > now() - $2::interval${fBreakdown.sql}
         GROUP BY os
         ORDER BY value DESC, label ASC
         LIMIT 8`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
 
     query<{ label: string; value: number }>(
@@ -208,12 +254,23 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
          FROM events
         WHERE site_id = $1
           AND created_at > now() - $2::interval
-          AND event_type = 'custom'
+          AND event_type = 'custom'${fBreakdown.sql}
         GROUP BY event_name
         ORDER BY value DESC, label ASC
         LIMIT 10`,
-      [siteId, window]
+      [siteId, window, ...fBreakdown.params]
     ),
+
+    // --- goals: same window and filters as everything else ------------------
+    query<{
+      id: string;
+      name: string;
+      type: 'event' | 'page';
+      value: string;
+      created_at: Date;
+      conversions: number;
+      visitors: number;
+    }>(goalResultsSql(fSummary.sql), [siteId, window, ...fSummary.params]),
 
     query<{
       path: string;
@@ -229,10 +286,10 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
       `SELECT path, referrer_domain, country, device, browser,
               event_type, event_name, is_new_visitor, created_at
          FROM events
-        WHERE site_id = $1
+        WHERE site_id = $1${fRecent.sql}
         ORDER BY created_at DESC
         LIMIT 12`,
-      [siteId]
+      [siteId, ...fRecent.params]
     ),
   ]);
 
@@ -272,6 +329,16 @@ export async function getStats(siteId: string, spec: RangeSpec): Promise<StatsRe
     browsers: toBreakdown(browsersResult.rows),
     operatingSystems: toBreakdown(operatingSystemsResult.rows),
     customEvents: toBreakdown(customEventsResult.rows),
+    goals: goalsResult.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      value: row.value,
+      createdAt: row.created_at.toISOString(),
+      conversions: row.conversions,
+      visitors: row.visitors,
+      conversionRate: visitors > 0 ? (row.visitors / visitors) * 100 : null,
+    })),
     recent: recentResult.rows.map((row) => ({
       path: row.path,
       referrer: row.referrer_domain,

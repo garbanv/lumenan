@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { SALT_SQL } from '../lib/salts.mjs';
+import { goalResultsSql } from '../lib/goals.mjs';
+import { buildFilterClause } from '../lib/filters.mjs';
 
 // These mirror the queries in lib/stats.ts. They are duplicated rather than
 // imported because lib/stats.ts pulls in the pg pool, which PGlite cannot stand
@@ -79,7 +81,7 @@ SELECT path AS label, count(*)::int AS value
 const PREVIOUS_SQL = `
 SELECT
   count(*) FILTER (WHERE event_type = 'pageview')::int AS pageviews,
-  count(*) FILTER (WHERE is_new_visitor)::int          AS visitors,
+  count(DISTINCT visitor_hash)::int          AS visitors,
   0::int                                               AS events
   FROM events
  WHERE site_id = $1
@@ -685,6 +687,82 @@ check('daily_salts is idempotent to re-apply and survives a schema re-run', asyn
   await db.exec(schema);
   const { rows } = await db.query(`SELECT count(*)::int AS n FROM daily_salts`);
   assertEqual(rows[0].n, 2, 'existing salts are untouched by re-applying the schema');
+});
+
+// ---------------------------------------------------------------------------
+// Conversion goals. These run the exact SQL lib/goals.mjs sends.
+// ---------------------------------------------------------------------------
+
+check('goals count events and pages, exactly and by prefix, within the window', async () => {
+  // Own owner row: earlier checks delete the shared test user.
+  const owner = await db.query(
+    `INSERT INTO users (email, email_key, password_hash, name)
+     VALUES ('goals@example.com', 'goals@example.com', 'x', 'Goals') RETURNING id`
+  );
+  await db.query(
+    `INSERT INTO sites (id, user_id, name, domain) VALUES ('goal-site', $1, 'Goals', 'goals.test')`,
+    [owner.rows[0].id]
+  );
+  const ev = (visitor, type, path, name, country, ago = '1 hour') =>
+    db.query(
+      `INSERT INTO events (site_id, visitor_hash, path, event_type, event_name, country, created_at)
+       VALUES ('goal-site', $1, $2, $3, $4, $5, now() - $6::interval)`,
+      [visitor, path, type, name, country, ago]
+    );
+
+  await ev('a', 'pageview', '/', null, 'DE');
+  await ev('a', 'custom', '/', 'signup', 'DE');
+  await ev('a', 'custom', '/', 'signup', 'DE'); // same visitor twice: 2 conversions, 1 visitor
+  await ev('b', 'custom', '/', 'signup', 'US');
+  await ev('b', 'pageview', '/thank-you', null, 'US');
+  await ev('c', 'pageview', '/blog/post-1', null, 'US');
+  await ev('c', 'pageview', '/blog/post-2', null, 'US');
+  await ev('d', 'pageview', '/blogger', null, 'US'); // must NOT match "/blog/*"
+  await ev('e', 'custom', '/', 'signup', 'US', '30 days'); // outside a 7-day window
+  await ev('f', 'pageview', '/100%', null, 'US'); // literal % in a path
+
+  await db.query(
+    `INSERT INTO goals (site_id, name, type, value) VALUES
+       ('goal-site', 'Signed up', 'event', 'signup'),
+       ('goal-site', 'Thank you', 'page',  '/thank-you'),
+       ('goal-site', 'Blog',      'page',  '/blog/*'),
+       ('goal-site', 'Never',     'event', 'nothing'),
+       ('goal-site', 'Percent',   'page',  '/100%')`
+  );
+
+  const byName = async (filterSql = '', params = []) => {
+    const { rows } = await db.query(goalResultsSql(filterSql), ['goal-site', '7 days', ...params]);
+    return Object.fromEntries(rows.map((r) => [r.name, r]));
+  };
+
+  const all = await byName();
+  assertEqual(all['Signed up'].conversions, 3, 'three signups in the window (the 30-day-old one is excluded)');
+  assertEqual(all['Signed up'].visitors, 2, 'by two distinct visitors');
+  assertEqual(all['Thank you'].conversions, 1, 'exact page match');
+  assertEqual(all['Blog'].conversions, 2, 'prefix match counts /blog/post-1 and -2');
+  assertEqual(all['Blog'].visitors, 1, 'both by visitor c, and /blogger is not matched');
+  assertEqual(all['Never'].conversions, 0, 'a goal with no events is still listed, with zero');
+  assertEqual(all['Percent'].conversions, 1, 'a literal % in a path is not treated as a wildcard');
+
+  const de = buildFilterClause({ country: 'DE' }, 3, 'e.');
+  const germany = await byName(de.sql, de.params);
+  assertEqual(germany['Signed up'].conversions, 2, 'the dashboard filter narrows goals too');
+  assertEqual(germany['Thank you'].conversions, 0, 'no German thank-you page views');
+  assertEqual(Object.keys(germany).length, 5, 'every goal is still listed under a filter');
+});
+
+check('goals are unique per site/type/value and cascade with the site', async () => {
+  let rejected = false;
+  try {
+    await db.query(`INSERT INTO goals (site_id, name, type, value) VALUES ('goal-site', 'Dup', 'event', 'signup')`);
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, 'a duplicate goal is rejected');
+
+  await db.query(`DELETE FROM sites WHERE id = 'goal-site'`);
+  const { rows } = await db.query(`SELECT count(*)::int AS n FROM goals WHERE site_id = 'goal-site'`);
+  assertEqual(rows[0].n, 0, 'deleting the site removes its goals');
 });
 
 // ---------------------------------------------------------------------------
