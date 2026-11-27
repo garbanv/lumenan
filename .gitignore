@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+.next/
+out/
+build/
+dist/
+
+# environment
+.env
+.env.local
+.env*.local
+
+# tooling caches (npm cache is redirected here because ~/.npm is outside the sandbox)
+.npm-cache/
+*.tsbuildinfo
+next-env.d.ts
+
+# local database volumes / dumps
+*.sql.gz
+.pgdata/
+
+# downloaded GeoIP database (scripts/download-geoip.mjs); CC BY 4.0, not redistributed here
+data/
+
+# misc
+.DS_Store
+*.pem
+coverage/

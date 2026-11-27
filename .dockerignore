@@ -1,0 +1,13 @@
+node_modules
+.next
+.npm-cache
+.pgdata
+.env
+.env.local
+*.log
+npm-debug.log
+.git
+.gitignore
+README.md
+*.zip
+.DS_Store
