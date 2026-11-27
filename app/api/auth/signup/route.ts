@@ -3,6 +3,7 @@ import { isCrossOrigin, jsonError, readJson } from '@/lib/api';
 import { startSession, userAgentOf } from '@/lib/auth-routes';
 import { createUser, isValidEmail } from '@/lib/users';
 import { validatePassword } from '@/lib/password';
+import { signupsOpen } from '@/lib/env';
 
 export const runtime = 'nodejs';
 
@@ -14,6 +15,9 @@ interface SignupBody {
 
 export async function POST(req: Request) {
   if (isCrossOrigin(req)) return jsonError('Cross-origin request rejected.', 403);
+
+  // Checked before the body is read or any account is touched.
+  if (!signupsOpen()) return jsonError('Signups are closed on this deployment.', 403);
 
   const { data, error } = await readJson<SignupBody>(req);
   if (error) return error;

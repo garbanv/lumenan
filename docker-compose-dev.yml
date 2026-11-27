@@ -42,6 +42,7 @@ services:
       VISITOR_SALT: ${VISITOR_SALT}
       NEXT_PUBLIC_APP_ORIGIN: ${NEXT_PUBLIC_APP_ORIGIN:-http://localhost:3000}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
     ports:
       - '3000:3000'
     expose:

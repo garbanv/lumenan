@@ -236,6 +236,7 @@ npm run db:seed
 | `GEOIP_DB_PATH` | no | Location of the DB-IP country file. Default `data/geoip/dbip-country-lite.csv.gz`. |
 | `GEOIP_AUTO_UPDATE` | no | `false` stops the app downloading a newer monthly GeoIP file on its own. Default: enabled. |
 | `TRUSTED_PROXY_HOPS` | no | Number of reverse proxies in front of the app that append to `X-Forwarded-For`. Default `1` (one Traefik/nginx/Vercel). Use `2` for Cloudflare plus a proxy. The client IP is taken that many entries from the right, because anything further left is client-supplied. `0` ignores forwarding headers entirely (all visitors collapse into one). Too high lets visitors spoof their IP and dodge the rate limit; too low attributes traffic to your own proxy. |
+| `ALLOW_SIGNUP` | no | Default `true`. Set `false` to stop new accounts being created (`/signup` shows "Signups are closed" and `POST /api/auth/signup` returns 403); existing accounts and sign-in are unaffected. Create the accounts you need first, then close signups on any deployment reachable from the internet. Needs a restart, not a rebuild. |
 | `NEXT_PUBLIC_APP_ORIGIN` | no | Public origin, used for absolute URLs. Falls back to `localhost:3000`, or `VERCEL_URL` when deployed there. |
 
 ---

@@ -6,6 +6,8 @@
  * build only needs to evaluate modules, not connect to anything.
  */
 
+import { parseBooleanFlag } from './flags';
+
 function required(name: string, hint: string): string {
   const value = process.env[name];
   if (!value) {
@@ -53,6 +55,17 @@ export function trustedProxyHops(): number {
   if (raw === undefined || raw.trim() === '') return 1;
   const n = Number.parseInt(raw, 10);
   return Number.isInteger(n) && n >= 0 && n <= 10 ? n : 1;
+}
+
+/**
+ * Whether new accounts may be created. On by default. Set ALLOW_SIGNUP=false on
+ * a deployment that should only serve people you have already set up: it stops
+ * strangers who find the URL from creating accounts. Existing accounts and
+ * sign-in are unaffected. Read on every call, so changing it only needs a
+ * restart, not a rebuild.
+ */
+export function signupsOpen(): boolean {
+  return parseBooleanFlag(process.env.ALLOW_SIGNUP, true);
 }
 
 /** Public origin, used for absolute URLs in the marketing pages and snippets. */

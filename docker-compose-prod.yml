@@ -6,8 +6,9 @@ services:
       POSTGRES_USER: ${SERVICE_USER_POSTGRES}
       POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
       POSTGRES_DB: analytics
-    ports:
-      - '5432:5432'  
+    # No `ports:` here on purpose. The database is reached by the other services
+    # over the compose network; publishing 5432 would put it on the server's
+    # public IP, protected by nothing but its password.
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -42,8 +43,10 @@ services:
       VISITOR_SALT: ${SERVICE_PASSWORD_64_VISITORSALT}
       NEXT_PUBLIC_APP_ORIGIN: ${NEXT_PUBLIC_APP_ORIGIN:-http://localhost:3000}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
-    ports:
-      - '3000:3000'
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+    # `expose`, not `ports`: the reverse proxy (Coolify/Traefik) reaches the app
+    # over the network. Publishing 3000 would let people bypass the proxy over
+    # plain HTTP, where X-Forwarded-For can be forged.
     expose:
       - '3000'
     depends_on:
